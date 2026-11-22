@@ -1,6 +1,8 @@
 """Token 管理端（独立端口）。
 
-单独跑一个 uvicorn 进程（默认 6087 端口，只监听 localhost），
+单独跑一个 uvicorn 进程（默认 6087 端口）。监听地址由 ADMIN_HOST 控制：
+宿主机直跑时默认 127.0.0.1（只监听 localhost），容器镜像里默认 0.0.0.0
+（Docker 端口映射是 DNAT 到容器 IP，只绑 loopback 时宿主机访问不到）。
 与 v1 推理服务完全隔离。包含：
 
 - 登录页：输入 ADMIN_TOKEN（docker 环境变量注入，替代原 TOKEN）

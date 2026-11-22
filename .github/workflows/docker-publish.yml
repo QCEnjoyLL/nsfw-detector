@@ -91,6 +91,7 @@ jobs:
 
           docker run -d --name nsfw-smoke \
             -p 6086:6086 \
+            -p 127.0.0.1:6087:6087 \
             -e ADMIN_TOKEN=ci-smoke-token \
             -e LOG_LEVEL=info \
             nsfw:ci
@@ -147,6 +148,30 @@ jobs:
           echo "==> 缓存统计接口（公开路径，验证 SQLite 缓存可用）"
           curl -fsS http://127.0.0.1:6086/api/cache_stats
           echo
+
+          # 回归测试：管理端口必须能从宿主机通过 -p 映射访问。
+          # 容器内若只绑 127.0.0.1（而不是 0.0.0.0），Docker 的 DNAT 到不了，
+          # 这里会连接被拒——正是「宿主机打不开 6087」那个坑。
+          echo "==> 管理端口（6087）应能从宿主机访问"
+          admin_code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6087/)
+          if [ "$admin_code" != "200" ]; then
+            echo "::error::管理端口返回 $admin_code（多半是容器内 ADMIN_HOST 仍为 127.0.0.1）"
+            docker logs nsfw-smoke
+            exit 1
+          fi
+          echo "登录页 200 ✔"
+
+          echo "==> 管理 API 应能带 X-Admin-Token 调用"
+          curl -fsS -H "X-Admin-Token: ci-smoke-token" \
+            http://127.0.0.1:6087/api/admin/tokens -o /tmp/tokens.json
+          cat /tmp/tokens.json
+          echo
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/tokens.json'))
+          assert d['code'] == 200, d
+          print('管理 API 正常')
+          "
 
       - name: 输出镜像体积
         if: always()

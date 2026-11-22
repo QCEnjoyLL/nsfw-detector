@@ -74,7 +74,7 @@ docker compose up -d --build
 Once running:
 
 - API: `http://your-server:6086`
-- Admin page: `http://your-server:6087` (log in with `ADMIN_TOKEN`)
+- Admin page: `http://127.0.0.1:6087` (**on the machine running the container**; log in with `ADMIN_TOKEN`). Compose binds it to host `127.0.0.1`; see [Opening the admin page](#opening-the-admin-page) for remote access
 
 ### Option 2: Build the image manually
 
@@ -88,7 +88,7 @@ cd nsfw
 docker run -d \
   --name nsfw \
   -p 6086:6086 \
-  -p 6087:6087 \
+  -p 127.0.0.1:6087:6087 \
   -e ADMIN_TOKEN=your-secret-here \
   -v "$(pwd)/data:/opt/nsfw/data" \
   --restart always \
@@ -115,7 +115,7 @@ docker pull ghcr.io/qcenjoyll/nsfw-detector:latest
 docker run -d \
   --name nsfw \
   -p 6086:6086 \
-  -p 6087:6087 \
+  -p 127.0.0.1:6087:6087 \
   -e ADMIN_TOKEN=your-secret-here \
   -v "$(pwd)/data:/opt/nsfw/data" \
   --restart always \
@@ -163,7 +163,7 @@ ADMIN_TOKEN=your-secret-here ./run.sh
 
 ### First run
 
-1. Open `http://your-server:6087` and log in with `ADMIN_TOKEN`
+1. Open `http://127.0.0.1:6087` (on the machine running the container) and log in with `ADMIN_TOKEN`
 2. Click **New Token**, give it a name (e.g. "production"), set expiry and quotas as needed
 3. **Copy the plaintext token** — it is shown only once
 4. Call the API with it
@@ -298,7 +298,7 @@ Everything is configured through environment variables. For Docker, put them und
 |---|---|---|
 | `ADMIN_TOKEN` | empty | **Admin page login secret**. The admin page is unusable without it |
 | `ADMIN_ENABLED` | `1` | Set to `0` to disable the admin port |
-| `ADMIN_HOST` | `127.0.0.1` | Admin listen address. Localhost only by default |
+| `ADMIN_HOST` | see note | Admin listen address. Bare-metal default `127.0.0.1` (localhost only); **the container image defaults to `0.0.0.0`**, because Docker port mapping DNATs traffic to the container IP and a loopback-only bind is unreachable from the host (see [Opening the admin page](#opening-the-admin-page)) |
 | `ADMIN_PORT` | `6087` | Admin port |
 | `TOKENS_DB_PATH` | `data/tokens.db` | Token database path |
 | `TOKEN` | empty | **Deprecated**, kept for compatibility: this single secret is still accepted if set |
@@ -336,25 +336,38 @@ in SQLite behind a dedicated admin page:
 - Tokens look like `nsfw_` plus 64 hex characters; the database stores **only a sha256 hash**,
   so a leak does not expose usable tokens
 - The plaintext is shown only once, at creation time
-- The admin port listens on `127.0.0.1` by default
+- The admin port is bound to host `127.0.0.1` only by default (container side listens on `0.0.0.0` because of Docker port mapping)
 - Auth failures return distinct status codes for easier debugging
 
 ### Opening the admin page
 
 ```
-http://your-server:6087
+http://127.0.0.1:6087        # compose / docker run bind it to host 127.0.0.1
 ```
 
-Log in with `ADMIN_TOKEN`.
+Open it **on the machine running the container** and log in with `ADMIN_TOKEN`.
 
-**For remote access, prefer an SSH tunnel** rather than setting `ADMIN_HOST=0.0.0.0`:
+> **Why `0.0.0.0` inside the container?**
+> The admin listen address comes from `ADMIN_HOST`. The image defaults to `0.0.0.0`:
+> `docker run -p 6087:6087` is a DNAT rule that forwards to the *container IP*:6087,
+> never to the container's `127.0.0.1`. With a loopback-only bind, every host-side
+> mapping ends in `Connection refused` — the startup log then prints
+> `admin_host=127.0.0.1` as a hint.
+>
+> The security boundary lives on the **host** side: mapping
+> `-p 127.0.0.1:6087:6087` (as this repo's compose does) still restricts the admin page
+> to localhost.
+
+**To reach it from another machine, prefer an SSH tunnel** rather than changing the
+mapping to `"6087:6087"`:
 
 ```bash
 ssh -L 6087:127.0.0.1:6087 user@your-server
 # then open http://127.0.0.1:6087 locally
 ```
 
-If you must expose it, put it behind a firewall allowlist or a reverse proxy with HTTPS.
+If you must expose it, put it behind a firewall allowlist or a reverse proxy with HTTPS,
+and make sure `ADMIN_TOKEN` is strong.
 
 ### What the page does
 
@@ -685,10 +698,19 @@ Image URLs often contain `?`, `&`, `#` which need extra escaping in a query stri
 URLs are recorded verbatim by browsers, CDNs and access logs — leaking what you are checking.
 POST only.
 
-**The admin page won't load?**
+**The admin page won't load (`ERR_CONNECTION_REFUSED`)?**
 
-It listens on `127.0.0.1` by default (inside the container). Use an SSH tunnel, or check
-`ADMIN_HOST` and your port mapping.
+Check the startup line `[run.sh] admin port=6087 admin_host=...` in the container log.
+
+- `admin_host=127.0.0.1` → the container only bound its loopback, so no host `-p` mapping can
+  ever reach it. The image defaults to `ADMIN_HOST=0.0.0.0`; if you are on an older image or
+  overrode `environment`, drop that override.
+- `admin_host=0.0.0.0` but still refused → the port mapping is missing: check that `docker ps`
+  shows 6087, and that compose maps `"127.0.0.1:6087:6087"` (localhost only) or `"6087:6087"`
+  (reachable from the LAN).
+- From another machine → it is bound to the host's `127.0.0.1` by default; use an SSH tunnel:
+  `ssh -L 6087:127.0.0.1:6087 user@your-server`.
+- It opens but login fails → `ADMIN_TOKEN` is unset or mistyped.
 
 **No access logs in the output?**
 

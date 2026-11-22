@@ -16,11 +16,20 @@ FROM python:3.13-slim-trixie
 # PYTHONUNBUFFERED：日志实时输出，docker logs 不会攒着
 # PYTHONDONTWRITEBYTECODE：镜像里已用 compileall 预编译，运行时不必再写 .pyc
 # PIP_NO_CACHE_DIR：任何 pip 调用都不落缓存
+#
+# ADMIN_HOST=0.0.0.0 是必须的，不是放松安全：
+#   docker run -p 6087:6087 做的是 DNAT，流量被转发到「容器 IP:6087」
+#   （如 172.17.0.2:6087），而不是容器的 127.0.0.1。若管理端口只监听
+#   容器内的 loopback，宿主机怎么映射都连不上（Connection refused）。
+#   所以容器内必须监听 0.0.0.0；「只允许本机访问」这一目的改由宿主机侧
+#   的绑定地址实现 —— 用 -p 127.0.0.1:6087:6087（compose 里已按此配置），
+#   需要远程访问再配 SSH 隧道或反向代理。
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     APP_PORT=6086 \
+    ADMIN_HOST=0.0.0.0 \
     LANG=C.UTF-8
 
 WORKDIR /opt/nsfw

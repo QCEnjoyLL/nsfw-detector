@@ -9,8 +9,11 @@ services:
     image: nsfw:local
     ports:
       - "6086:6086"
-      # Token 管理端口（默认只监听 localhost，外部访问需配合 SSH 隧道 / 反代）
-      - "6087:6087"
+      # Token 管理端口。默认只绑到宿主机 127.0.0.1，即只有本机能打开管理页面，
+      # 远程访问走 SSH 隧道（见 README「打开管理页面」）。
+      # 要让局域网/公网直接访问，改成 "6087:6087"（务必配强 ADMIN_TOKEN，
+      # 并确认 ADMIN_HOST 为 0.0.0.0 —— 镜像里已默认设置）。
+      - "127.0.0.1:6087:6087"
     # 环境变量
     environment:
       # 管理密钥：管理页面登录用。设置后旧的 TOKEN 环境变量不再用于鉴权
@@ -25,10 +28,12 @@ services:
       - NSFW_THRESHOLD=0.8
       # 进程数。低配机器保持 1 即可；run.sh 会自动收敛到 min(4, 核数/2)
       - WORKERS=1
-      # Token 管理端口（默认 6087，只监听 localhost；想对外暴露改 0.0.0.0）
+      # Token 管理端口。容器内必须监听 0.0.0.0（Dockerfile 已设），
+      # 否则宿主机的端口映射（DNAT 到容器 IP）连不上；
+      # 「只允许本机访问」由上面的 ports 绑定地址控制。
       # - ADMIN_ENABLED=1
       # - ADMIN_PORT=6087
-      # - ADMIN_HOST=127.0.0.1
+      # - ADMIN_HOST=0.0.0.0
       # 推理线程数，留空则由 run.sh 按 核数/WORKERS 自动计算
       # - ORT_NUM_THREADS=2
       # URL 结果缓存（默认开）。命中时延迟从 ~200ms 降到 <1ms。

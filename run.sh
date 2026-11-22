@@ -28,6 +28,12 @@ APP_PORT="${APP_PORT:-6086}"
 LOG_LEVEL="${LOG_LEVEL:-warning}"
 
 # 独立管理端口
+#
+# ADMIN_HOST 默认 127.0.0.1，只适合「宿主机直接跑本服务」的场景。
+# 容器里必须监听 0.0.0.0：docker -p 是 DNAT，流量被转发到容器 IP，
+# 不会落到容器的 loopback 上，只绑 127.0.0.1 的话宿主机怎么映射都连不上。
+# 镜像的 Dockerfile 已经 ENV ADMIN_HOST=0.0.0.0，宿主机侧再用
+# -p 127.0.0.1:6087:6087 把访问限制回本机。
 ADMIN_ENABLED="${ADMIN_ENABLED:-1}"
 ADMIN_HOST="${ADMIN_HOST:-127.0.0.1}"
 ADMIN_PORT="${ADMIN_PORT:-6087}"
@@ -119,10 +125,16 @@ activate_env() {
 }
 
 # ---------------------------------------------------------------------------
-# Token 管理端口（独立进程，默认 6087，只监听 localhost）
+# Token 管理端口（独立进程，默认 6087）
+# 宿主机直跑时默认只听 127.0.0.1；容器里由 Dockerfile 设为 0.0.0.0
 # ---------------------------------------------------------------------------
 runAdmin() {
     echo "[run.sh] admin port=$ADMIN_PORT admin_host=$ADMIN_HOST"
+    # 容器内监听 127.0.0.1 时，宿主机 -p 端口映射必然连不上，提前提示省得排查
+    if [ "$ADMIN_HOST" = "127.0.0.1" ] && [ -f /.dockerenv ]; then
+        echo "[run.sh] 警告：容器内监听 127.0.0.1，宿主机的 -p 6087:6087 无法访问。" \
+             "请设 ADMIN_HOST=0.0.0.0，并用 -p 127.0.0.1:6087:6087 限制来源。" >&2
+    fi
     # 不带 exec：用 & 后台启动，主服务在前台，trap 清理
     uvicorn app.admin:admin_app \
         --host "$ADMIN_HOST" \
