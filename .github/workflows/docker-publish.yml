@@ -6,7 +6,10 @@
 #   - Pull Request：只构建 + 冒烟测试，绝不推送
 #   - 手动触发（Actions -> Run workflow）：可自选目标平台、可关闭推送
 #
-# 镜像地址：ghcr.io/<owner>/<repo>:latest（owner 与 repo 自动取当前仓库，全小写）
+# 镜像地址：ghcr.io/<owner>/<repo>:latest（owner 与 repo 自动取当前仓库，并强制小写）
+#   本仓库实际为 ghcr.io/qcenjoyll/nsfw-detector
+#   注意：GitHub 用户名是 QCEnjoyLL，但 registry 镜像名只允许小写，写成
+#   ghcr.io/QCEnjoyLL/... 会被拒绝（invalid reference format）。
 #
 # 首次推送后，Package 默认是 Private。要让别人免登录拉取，需要到
 # 仓库右侧 Packages -> 对应镜像 -> Package settings 里把可见性改成 Public。

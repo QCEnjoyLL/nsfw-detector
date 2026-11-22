@@ -17,6 +17,7 @@
 
 - [功能特性](#功能特性)
 - [快速开始](#快速开始)
+- [自动构建与镜像发布](#自动构建与镜像发布)
 - [配置项](#配置项)
 - [Token 管理与鉴权](#token-管理与鉴权)
 - [API 文档](#api-文档)
@@ -43,7 +44,7 @@
 - **URL 检测只接受 POST**，URL 放请求体，避免特殊字符转义问题，也避免 URL 被访问日志完整记录
 - **多 Token 管理**：有效期、每日上限、总量上限，独立管理端口可视化增删改查
 - **结果缓存**：SQLite 落地，多 worker 共享，重启不丢，命中延迟 <1ms
-- **全本地构建**：镜像由本仓库 Dockerfile 构建，不依赖任何第三方预构建镜像
+- **镜像自持**：镜像由本仓库 Dockerfile 构建，不依赖任何第三方预构建镜像；CI 把构建产物发布到 GHCR，可免构建直接用
 - 内置并发保护：推理信号量 + 连接数上限，过载时快速失败而不是拖垮整机
 - 首页内置 Web 界面（`WEBUI=on` 开启），可手动传图测试
 
@@ -103,11 +104,11 @@ IMAGE=myrepo/nsfw:1.0 ./build.sh         # 自定义镜像名
 
 ### 方式三：直接拉取预构建镜像（GHCR）
 
-仓库内置了 GitHub Actions 工作流 [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)：
-推送到 `main`、或打 `v*` 标签时会自动构建镜像、跑冒烟测试，然后推送到 GitHub Container Registry。
+不想自己构建时，直接用 CI 产出的镜像。工作流 [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+会在每次推送到 `main`、以及每次打 `v*` 标签时构建镜像、跑冒烟测试，然后推送到 GitHub Container Registry。
 
 ```bash
-docker pull ghcr.io/qcoenjoyll/nsfw-detector:latest
+docker pull ghcr.io/qcenjoyll/nsfw-detector:latest
 
 docker run -d \
   --name nsfw \
@@ -116,30 +117,31 @@ docker run -d \
   -e ADMIN_TOKEN=你的管理密钥 \
   -v "$(pwd)/data:/opt/nsfw/data" \
   --restart always \
-  ghcr.io/qcoenjoyll/nsfw-detector:latest
+  ghcr.io/qcenjoyll/nsfw-detector:latest
 ```
 
-镜像标签约定：
-
-| 触发方式 | 生成的标签 |
-|---|---|
-| 推送到 `main` | `main`、`latest`、`sha-<短提交>` |
-| 打 `v1.2.3` 标签 | `1.2.3`、`1.2`、`latest`、`sha-<短提交>` |
-| Pull Request | 不推送，只构建 + 冒烟测试 |
-| 手动触发（Actions → Run workflow） | 可自选平台，可关闭推送 |
-
-冒烟测试会真的启动容器、等 HEALTHCHECK 变绿、调用 `/api/upload_check` 做一次推理，
-所以推上去的镜像至少保证「能起来、模型能加载、能出结果」。
-
-> 首次推送后 Package 默认是 **Private**，需要到仓库右侧 **Packages → 对应镜像 →
-> Package settings** 把可见性改成 Public，别人才能免登录 `docker pull`。
+> ⚠️ **Package 默认是 Private**。首次推送后需要到仓库右侧 **Packages → nsfw-detector →
+> Package settings → Danger Zone → Change visibility** 改成 **Public**，
+> 别人才可能免登录 `docker pull`。在你改之前，任何人都要先登录：
 >
-> 默认只构建 `linux/amd64`。想换平台可到 **Settings → Secrets and variables → Actions →
-> Variables** 新建仓库变量 `PLATFORMS`，或在手动触发时填写。但要注意 **arm64 目前不行**：
-> `zxing-cpp==2.3.0` 只发布 x86_64 / i686 的 manylinux wheel，没有 aarch64 版本，
-> 在 arm64 上 pip 会退回源码编译，而镜像里没有 cmake / g++，构建会失败。
-> 真要出 arm64 镜像，需要先给 Dockerfile 加一个装了构建工具链的 builder 阶段，
-> 把 zxing-cpp 编成 wheel 再拷进运行阶段。
+> ```bash
+> echo "$GITHUB_TOKEN" | docker login ghcr.io -u qcenjoyll --password-stdin
+> ```
+>
+> token 需要 `read:packages` 权限。未登录时拉取会报 `unauthorized` / `denied`。
+
+**关于大小写**：GitHub 用户名是 `QCEnjoyLL`，但 Docker / GHCR 的镜像名
+**只允许小写**，所以镜像地址一律写成 `ghcr.io/qcenjoyll/nsfw-detector`。
+写成 `ghcr.io/QCEnjoyLL/...` 会被 registry 直接拒绝（`invalid reference format`）。
+GitHub 网页、`git clone`、`docker login -u` 这些地方大小写不敏感，保持 `QCEnjoyLL` 即可。
+
+常用标签（详见[下一节](#自动构建与镜像发布)）：
+
+```bash
+ghcr.io/qcenjoyll/nsfw-detector:latest      # 默认分支 / 最新版本
+ghcr.io/qcenjoyll/nsfw-detector:1.2.3       # 语义化版本（需要打 v1.2.3 标签）
+ghcr.io/qcenjoyll/nsfw-detector:sha-9bf94ea # 某次提交的不可变快照，回滚用
+```
 
 ### 方式四：不使用 Docker
 
@@ -172,6 +174,84 @@ curl -X POST 'http://服务器IP:6086/api/url_check' \
 
 > ⚠️ **在创建第一个 Token 之前，业务接口是不鉴权的**（兼容旧版行为）。
 > 如果要对公网开放，请先创建 Token。
+
+---
+
+## 自动构建与镜像发布
+
+工作流文件：[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)。
+目标很简单：**每次代码变更都产出一个「确认能跑」的镜像，并放到可直接拉取的位置**。
+
+### 什么时候触发
+
+| 触发 | 做什么 |
+|---|---|
+| push 到 `main` / `master` | 构建 → 冒烟测试 → 推送 GHCR |
+| 打 `v*` 标签（如 `v1.2.3`） | 同上，并额外打语义化版本标签 |
+| Pull Request | 只构建 + 冒烟测试，**不推送** |
+| 手动触发（Actions → Docker Image → Run workflow） | 可填目标平台、可关掉推送 |
+
+纯文档改动（`*.md`、`LICENSE`）不会触发构建，省 Actions 额度。
+
+### 两个 job
+
+1. **构建并冒烟测试**：构建 `linux/amd64` 镜像并 `load` 到本地，然后真的启动容器 →
+   等镜像内 `HEALTHCHECK` 变绿 → 请求首页确认 200 → 用镜像自带的 Pillow 生成一张图，
+   POST 到 `/api/upload_check` 做一次真实推理，断言返回 `code=200` 且 `nsfw` 分值在 `0~1`
+   → 再查 `/api/cache_stats` 确认 SQLite 缓存可用。
+   所以发布出去的镜像至少保证：**能起来、模型能加载、能出结果**。
+2. **推送镜像到 GHCR**：QEMU + Buildx 多平台构建，`docker/metadata-action` 生成标签，
+   推送后把镜像标签与 digest 写进 Job Summary（Actions 页面直接可见）。
+
+两个 job 用不同的 GHA 缓存 scope，互不干扰；同一分支连续推送时 `concurrency` 会取消上一次
+还在跑的构建，避免白烧额度。
+
+### 标签规则
+
+| 触发 | 标签 |
+|---|---|
+| push 到 `main` | `main`、`latest`、`sha-<短提交>` |
+| 打 `v1.2.3` | `1.2.3`、`1.2`、`latest`、`sha-<短提交>` |
+| 其他分支 | 分支名、`sha-<短提交>` |
+
+`sha-*` 是不可变快照，适合生产固定版本与回滚；`latest` 跟着默认分支和最新 release 走。
+
+### 发一个版本
+
+```bash
+git tag v1.2.3          # 语义化版本，必须 v 开头
+git push origin v1.2.3  # 触发工作流，产出 1.2.3 / 1.2 / latest
+```
+
+### 仓库变量（可选）
+
+到 **Settings → Secrets and variables → Actions → Variables** 添加：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PLATFORMS` | `linux/amd64` | 目标平台，逗号分隔 |
+
+> **arm64 目前不可用**：`zxing-cpp==2.3.0` 只发布 x86_64 / i686 的 manylinux wheel，
+> 没有 aarch64 版本，pip 在 arm64 上会退回源码编译，而镜像里没有 cmake / g++，
+> 构建必定失败（实测已确认）。要支持 arm64，需要先给 Dockerfile 加一个装了构建工具链的
+> builder 阶段，把 zxing-cpp 编成 wheel 再拷进运行阶段。
+
+不需要配置任何 Secret：推送用的是自动注入的 `GITHUB_TOKEN`，工作流里已经把权限收敛到
+`contents: read` + `packages: write`。
+
+### 本地复现同样的检查
+
+不想等 CI 时可以本地跑一遍等价流程：
+
+```bash
+docker build -t nsfw:ci .
+docker run -d --name nsfw-ci -p 6086:6086 -e ADMIN_TOKEN=test nsfw:ci
+curl -fsS http://127.0.0.1:6086/
+docker exec nsfw-ci python -c "from PIL import Image; Image.new('RGB',(96,96)).save('/tmp/a.jpg')"
+docker cp nsfw-ci:/tmp/a.jpg a.jpg
+curl -X POST http://127.0.0.1:6086/api/upload_check -F "file=@a.jpg"
+docker rm -f nsfw-ci
+```
 
 ---
 
@@ -595,6 +675,28 @@ nsfw/
 **Q：能识别 AI 生成的图片吗？**
 
 准确率明显低于真实照片。模型的训练数据以真实图片和传统绘画为主。
+
+**Q：`docker pull` 报 `unauthorized` / `denied`？**
+
+两种可能：① 这个 Package 还是 Private（首次推送后默认如此），先登录再拉，或把可见性改成 Public（见[方式三](#方式三直接拉取预构建镜像ghcr)）；② 镜像名大小写写错了，registry 只接受小写，必须是 `ghcr.io/qcenjoyll/nsfw-detector`。
+
+**Q：可以在 arm64（树莓派 / ARM 云主机 / 部分 NAS）上跑吗？**
+
+目前不行。`zxing-cpp==2.3.0` 没有 aarch64 的 wheel，pip 会退回源码编译，而镜像里没有 cmake / g++，构建直接失败。临时办法是在 arm64 机器上自己改 Dockerfile（加编译工具链）后本地构建。
+
+**Q：CI 为什么没给我的提交构建镜像？**
+
+只改 `*.md` 或 `LICENSE` 的提交被 `paths-ignore` 跳过了。另外 PR 只做构建 + 冒烟测试、不推送镜像。
+
+**Q：怎么固定生产环境用的镜像版本？**
+
+用 `sha-<短提交>` 或语义化版本标签，别用 `latest`：
+
+```bash
+docker pull ghcr.io/qcenjoyll/nsfw-detector:sha-9bf94ea
+```
+
+本地 `docker compose` 里把 `image:` 指向固定标签即可，回滚时改标签重启。
 
 ---
 
