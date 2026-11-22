@@ -1,0 +1,236 @@
+# 自动构建并发布 Docker 镜像
+#
+# 触发方式：
+#   - push 到 main / master：构建 amd64 镜像，冒烟测试通过后推送到 GHCR
+#   - 打 v* 标签（如 v1.2.0）：同上，并额外打上语义化版本标签
+#   - Pull Request：只构建 + 冒烟测试，绝不推送
+#   - 手动触发（Actions -> Run workflow）：可自选目标平台、可关闭推送
+#
+# 镜像地址：ghcr.io/<owner>/<repo>:latest（owner 与 repo 自动取当前仓库，全小写）
+#
+# 首次推送后，Package 默认是 Private。要让别人免登录拉取，需要到
+# 仓库右侧 Packages -> 对应镜像 -> Package settings 里把可见性改成 Public。
+#
+# 可选仓库变量（Settings -> Secrets and variables -> Actions -> Variables）：
+#   PLATFORMS 默认 linux/amd64；想同时出 arm64 就设成 linux/amd64,linux/arm64
+#             （多平台走 QEMU 模拟，构建时间会明显变长）
+name: Docker Image
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    # 纯文档改动不必重新打镜像
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "目标平台，逗号分隔；多平台会走 QEMU，构建明显变慢"
+        required: false
+        default: "linux/amd64"
+      push:
+        description: "构建成功后推送到 GHCR"
+        required: false
+        default: true
+        type: boolean
+
+# GITHUB_TOKEN 的最小权限：读代码 + 写 Packages
+permissions:
+  contents: read
+  packages: write
+
+# 同一分支连续推送时，取消上一次还在跑的构建
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # 平台优先级：手动触发时填的 > 仓库变量 PLATFORMS > 默认 amd64
+  PLATFORMS: ${{ github.event.inputs.platforms || vars.PLATFORMS || 'linux/amd64' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 构建 + 冒烟测试：确认镜像能起来、模型能加载、能真的推理
+  # ---------------------------------------------------------------------------
+  test:
+    name: 构建并冒烟测试（amd64）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 启用 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像（只加载到本地，不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: nsfw:ci
+          # 与 publish 用不同的 scope，避免两种构建配置互相污染缓存
+          cache-from: type=gha,scope=test
+          cache-to: type=gha,mode=max,scope=test
+
+      - name: 冒烟测试
+        run: |
+          set -euo pipefail
+
+          docker run -d --name nsfw-smoke \
+            -p 6086:6086 \
+            -e ADMIN_TOKEN=ci-smoke-token \
+            -e LOG_LEVEL=info \
+            nsfw:ci
+
+          echo "==> 等待健康检查通过（镜像内 HEALTHCHECK 间隔 30s，start-period 40s）"
+          healthy=no
+          for i in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' nsfw-smoke 2>/dev/null || echo unknown)
+            if [ "$status" = "healthy" ]; then
+              echo "健康检查通过（第 $i 次轮询）"
+              healthy=yes
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              echo "::error::容器状态 unhealthy"
+              docker logs nsfw-smoke
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$healthy" != "yes" ]; then
+            echo "::error::等待健康检查超时"
+            docker logs nsfw-smoke
+            exit 1
+          fi
+
+          echo "==> 首页应返回 200"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6086/)
+          if [ "$code" != "200" ]; then
+            echo "::error::首页返回 $code"
+            docker logs nsfw-smoke
+            exit 1
+          fi
+
+          echo "==> 用镜像自带的 Pillow 生成一张图，走一次真实推理"
+          docker exec nsfw-smoke python -c \
+            "from PIL import Image; Image.new('RGB', (96, 96), (120, 140, 160)).save('/tmp/sample.jpg', 'JPEG')"
+          docker cp nsfw-smoke:/tmp/sample.jpg /tmp/sample.jpg
+          curl -fsS -X POST http://127.0.0.1:6086/api/upload_check \
+            -F "file=@/tmp/sample.jpg" \
+            -o /tmp/result.json
+          cat /tmp/result.json
+          echo
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/result.json'))
+          assert d['code'] == 200, d
+          score = d['data'].get('nsfw')
+          assert isinstance(score, (int, float)), d
+          assert 0.0 <= score <= 1.0, d
+          print('推理正常，nsfw =', score)
+          "
+
+          echo "==> 缓存统计接口（公开路径，验证 SQLite 缓存可用）"
+          curl -fsS http://127.0.0.1:6086/api/cache_stats
+          echo
+
+      - name: 输出镜像体积
+        if: always()
+        run: docker image inspect -f '镜像体积：{{.Size}} 字节' nsfw:ci || true
+
+      - name: 失败时打印容器日志
+        if: failure()
+        run: docker logs nsfw-smoke || true
+
+      - name: 清理容器
+        if: always()
+        run: docker rm -f nsfw-smoke || true
+
+  # ---------------------------------------------------------------------------
+  # 2) 构建多平台镜像并推送到 GHCR
+  # ---------------------------------------------------------------------------
+  publish:
+    name: 推送镜像到 GHCR
+    needs: test
+    # PR 不推送；手动触发时勾掉了 push 也不推送
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 启用 QEMU（多平台构建需要）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 启用 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # 分支名，如 main
+            type=ref,event=branch
+            # 语义化版本：v1.2.3 -> 1.2.3，同时打 1.2
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # 不可变标签，便于回滚：sha-abc1234
+            type=sha,format=short,prefix=sha-
+            # 默认分支与 v* 标签同时打 latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=nsfw-detector
+            org.opencontainers.image.description=NSFW image detection HTTP service, CPU-only ONNX inference
+            org.opencontainers.image.licenses=AGPL-3.0
+
+      - name: 构建并推送
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=publish
+          cache-to: type=gha,mode=max,scope=publish
+
+      - name: 写入构建摘要
+        run: |
+          {
+            echo "### 镜像已推送"
+            echo
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| 平台 | \`$PLATFORMS\` |"
+            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            for tag in ${{ steps.meta.outputs.tags }}; do
+              echo "| 标签 | \`$tag\` |"
+            done
+            echo
+            echo "拉取："
+            echo
+            echo "\`\`\`bash"
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,17 @@
+# 统一用 LF 换行。
+#
+# 镜像里的 install.sh / run.sh 是 bash 脚本，一旦带 CRLF，容器里会直接报
+# "bad interpreter: /bin/bash^M" 或各种语法错误。Windows 上 Git 默认
+# core.autocrlf=true 会把文本检出成 CRLF，这里显式固定仓库与工作区都用 LF，
+# 保证本地构建和 CI 构建结果一致。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.onnx binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
