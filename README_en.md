@@ -2,6 +2,9 @@
 
 # NSFW Image Detection Service
 
+[![Docker Image](https://github.com/QCEnjoyLL/nsfw-detector/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/QCEnjoyLL/nsfw-detector/actions/workflows/docker-publish.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-nsfw--detector-2496ED?logo=docker&logoColor=white)](https://github.com/QCEnjoyLL/nsfw-detector/pkgs/container/nsfw-detector)
+
 An HTTP service for NSFW (Not Safe For Work) image detection built on a ViT model. CPU-only inference, suitable for a modest VPS or cloud instance, providing image moderation for forums, image hosts, chat platforms and content sites.
 
 The model is [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384) (ViT-tiny, 5.6M parameters). Quantized to int8 it weighs only 6.4MB and runs one image in about 18ms on 16 threads.

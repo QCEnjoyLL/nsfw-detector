@@ -2,6 +2,9 @@
 
 # NSFW 图片检测服务
 
+[![Docker Image](https://github.com/QCEnjoyLL/nsfw-detector/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/QCEnjoyLL/nsfw-detector/actions/workflows/docker-publish.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-nsfw--detector-2496ED?logo=docker&logoColor=white)](https://github.com/QCEnjoyLL/nsfw-detector/pkgs/container/nsfw-detector)
+
 基于 ViT 架构的 NSFW（Not Safe For Work）图片检测 HTTP 服务。纯 CPU 推理，适合部署在普通 VPS 或云服务器上，为论坛、图床、IM、内容平台等提供图片鉴黄能力。
 
 模型用的是 [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384)（ViT-tiny，5.6M 参数），int8 量化后只有 6.4MB，16 线程下单张推理约 18ms。
