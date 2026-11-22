@@ -134,10 +134,12 @@ docker run -d \
 > 首次推送后 Package 默认是 **Private**，需要到仓库右侧 **Packages → 对应镜像 →
 > Package settings** 把可见性改成 Public，别人才能免登录 `docker pull`。
 >
-> 默认只构建 `linux/amd64`。要出 arm64（部分 NAS、树莓派、ARM 云主机）时，到
-> **Settings → Secrets and variables → Actions → Variables** 新建仓库变量
-> `PLATFORMS=linux/amd64,linux/arm64`，或在手动触发时填这个值。多平台走 QEMU 模拟，
-> 构建时间会明显变长。
+> 默认只构建 `linux/amd64`。想换平台可到 **Settings → Secrets and variables → Actions →
+> Variables** 新建仓库变量 `PLATFORMS`，或在手动触发时填写。但要注意 **arm64 目前不行**：
+> `zxing-cpp==2.3.0` 只发布 x86_64 / i686 的 manylinux wheel，没有 aarch64 版本，
+> 在 arm64 上 pip 会退回源码编译，而镜像里没有 cmake / g++，构建会失败。
+> 真要出 arm64 镜像，需要先给 Dockerfile 加一个装了构建工具链的 builder 阶段，
+> 把 zxing-cpp 编成 wheel 再拷进运行阶段。
 
 ### 方式四：不使用 Docker
 

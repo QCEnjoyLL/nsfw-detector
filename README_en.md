@@ -138,10 +138,13 @@ boot, load the model and return a score.
 > authenticating, open **Packages → the image → Package settings** and switch visibility
 > to Public.
 >
-> Only `linux/amd64` is built by default. For arm64 (some NAS boxes, Raspberry Pi, ARM
-> cloud hosts), create a repository variable `PLATFORMS=linux/amd64,linux/arm64` under
-> **Settings → Secrets and variables → Actions → Variables**, or type it when dispatching
-> manually. Multi-platform builds run under QEMU and take noticeably longer.
+> Only `linux/amd64` is built by default. To target another platform, create a repository
+> variable `PLATFORMS` under **Settings → Secrets and variables → Actions → Variables**,
+> or type it when dispatching manually. Note that **arm64 does not work yet**:
+> `zxing-cpp==2.3.0` publishes manylinux wheels for x86_64 / i686 only, so on arm64 pip
+> falls back to a source build and the image has no cmake / g++, which fails. Supporting
+> arm64 needs a builder stage in the Dockerfile that compiles zxing-cpp into a wheel for
+> the runtime stage.
 
 ### Option 4: Without Docker
 

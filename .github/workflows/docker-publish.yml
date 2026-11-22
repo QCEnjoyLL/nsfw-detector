@@ -12,8 +12,10 @@
 # 仓库右侧 Packages -> 对应镜像 -> Package settings 里把可见性改成 Public。
 #
 # 可选仓库变量（Settings -> Secrets and variables -> Actions -> Variables）：
-#   PLATFORMS 默认 linux/amd64；想同时出 arm64 就设成 linux/amd64,linux/arm64
-#             （多平台走 QEMU 模拟，构建时间会明显变长）
+#   PLATFORMS 默认 linux/amd64，可填其他平台组合，但注意：
+#   zxing-cpp==2.3.0 只发布 x86_64 / i686 的 manylinux wheel，没有 aarch64 版本，
+#   arm64 上 pip 会退回源码编译，而基础镜像里没有 cmake/g++，构建必定失败。
+#   要出 arm64 镜像，得先给 Dockerfile 加一个带构建工具链的 builder 阶段。
 name: Docker Image
 
 on:
@@ -29,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "目标平台，逗号分隔；多平台会走 QEMU，构建明显变慢"
+        description: "目标平台，逗号分隔（arm64 目前会失败：zxing-cpp 无 aarch64 wheel，详见 README）"
         required: false
         default: "linux/amd64"
       push:
